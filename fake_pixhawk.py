@@ -1,3 +1,7 @@
+import os
+# Force MAVLink 2.0
+os.environ["MAVLINK20"] = "1"
+
 from pymavlink import mavutil
 import time
 import math
@@ -5,6 +9,7 @@ import math
 # ===============================
 # MAVLink connection
 # ===============================
+# We send TO MAVROS on 14550. MAVROS should be launched with fcu_url:=udp://@127.0.0.1:14550
 master = mavutil.mavlink_connection(
     'udpout:127.0.0.1:14550',
     source_system=1,
@@ -14,8 +19,9 @@ master = mavutil.mavlink_connection(
 def ts():
     return time.strftime("[%H:%M:%S]")
 
-print(f"{ts()} Fake Pixhawk FCU started")
-print(f"{ts()} Waiting for MAVROS...")
+print(f"{ts()} Fake Pixhawk FCU started (MAVLink 2.0)")
+print(f"{ts()} Sending heartbeats to 127.0.0.1:14550...")
+print(f"{ts()} Waiting for MAVROS commands...")
 
 # =========================================================
 # FCU state
@@ -85,11 +91,8 @@ while True:
     # -----------------------------------------------------
     if now - last_hb >= 1.0:
         base_mode = mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-
         if armed:
             base_mode |= mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
-
-        # 🔑 THIS IS THE CRITICAL LINE
         if mode == "GUIDED":
             base_mode |= mavutil.mavlink.MAV_MODE_FLAG_GUIDED_ENABLED
 
@@ -118,73 +121,82 @@ while True:
             )
             home_sent = True
 
-        # HIGHRES_IMU (required by MAVROS)
         master.mav.highres_imu_send(
             boot_ms() * 1000,
             0.0, 0.0, 9.81,
             0.0, 0.0, cmd_yaw_rate,
             0.0, 0.0, 0.0,
-            1013.25,
-            0.0,
-            0.0,
-            25.0,
+            1013.25, 0.0, 0.0, 25.0,
             0b111111111111
         )
-
+        if boot_ms() < 5000: # Log heartbeats for the first 5 seconds
+             print(f"{ts()} [TX] Sending Heartbeat...")
         last_hb = now
 
     # -----------------------------------------------------
     # Position + attitude @ 50 Hz
     # -----------------------------------------------------
     if now - last_pub >= 0.02:
-        # ENU → NED
-        ned_x = pos_y
-        ned_y = pos_x
-        ned_z = -pos_z
-
         master.mav.local_position_ned_send(
             boot_ms(),
-            ned_x, ned_y, ned_z,
+            pos_y, pos_x, -pos_z,
             vel_y, vel_x, -vel_z
         )
-
         master.mav.attitude_send(
             boot_ms(),
             0.0, 0.0, yaw,
             0.0, 0.0, cmd_yaw_rate
         )
-
         last_pub = now
 
     # -----------------------------------------------------
     # MAVLink RX
     # -----------------------------------------------------
     msg = master.recv_match(blocking=False)
-    if not msg:
-        continue
+    if msg:
+        mtype = msg.get_type()
+        
+        # Log incoming requests for debugging
+        if mtype not in ["HEARTBEAT", "SET_POSITION_TARGET_LOCAL_NED"]:
+             print(f"{ts()} [RX] {mtype}")
 
-    mtype = msg.get_type()
+        if mtype == "COMMAND_LONG":
+            # Always ACK any command to keep MAVROS happy
+            master.mav.command_ack_send(msg.command, mavutil.mavlink.MAV_RESULT_ACCEPTED)
 
-    if mtype == "COMMAND_LONG":
-        if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
-            armed = bool(msg.param1)
-            print(f"{ts()} [FCU] ARMED = {armed}")
-            master.mav.command_ack_send(
-                msg.command,
-                mavutil.mavlink.MAV_RESULT_ACCEPTED
-            )
+            if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
+                armed = bool(msg.param1)
+                print(f"{ts()} [FCU] ARMED = {armed}")
+            
+            elif msg.command == mavutil.mavlink.MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES:
+                print(f"{ts()} [FCU] Sending Autopilot Version...")
+                master.mav.autopilot_version_send(
+                    mavutil.mavlink.MAV_PROTOCOL_CAPABILITY_MAVLINK2,
+                    1, 0, 0, 0,
+                    bytearray([0]*8), bytearray([0]*8), bytearray([0]*8),
+                    0, 0, 0, bytearray([0]*18)
+                )
 
-    elif mtype == "SET_MODE":
-        if msg.custom_mode in MODE_NAMES:
-            mode = MODE_NAMES[msg.custom_mode]
-            print(f"{ts()} [FCU] MODE = {mode}")
+        elif mtype == "PARAM_REQUEST_LIST":
+            print(f"{ts()} [FCU] Param list requested (sending empty)")
+            # Send completion of param list (0 total)
+            master.mav.param_value_send(b"DUMMY_PARAM", 0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32, 0, 0)
+        
+        elif mtype == "MISSION_REQUEST_LIST":
+            print(f"{ts()} [FCU] Mission list requested (sending 0)")
+            master.mav.mission_count_send(msg.get_srcSystem(), msg.get_srcComponent(), 0)
 
-    elif mtype == "SET_POSITION_TARGET_LOCAL_NED":
-        # NED → ENU
-        cmd_vx = msg.vy
-        cmd_vy = msg.vx
-        cmd_vz = -msg.vz
-        cmd_yaw_rate = msg.yaw_rate
-        # print(f"{ts()} [FCU] MOVE CMD: vx={cmd_vx:.2f} vy={cmd_vy:.2f} vz={cmd_vz:.2f}") # Too spammy if enabled always
-        if boot_ms() % 1000 < 50: # Log roughly once per second
-             print(f"{ts()} [FCU] Receiving Move Commands...")
+        elif mtype == "SET_MODE":
+            if msg.custom_mode in MODE_NAMES:
+                mode = MODE_NAMES[msg.custom_mode]
+                print(f"{ts()} [FCU] MODE = {mode}")
+
+        elif mtype == "SET_POSITION_TARGET_LOCAL_NED":
+            cmd_vx = msg.vy
+            cmd_vy = msg.vx
+            cmd_vz = -msg.vz
+            cmd_yaw_rate = msg.yaw_rate
+            if boot_ms() % 1000 < 50:
+                 print(f"{ts()} [FCU] Receiving Move Commands...")
+    
+    time.sleep(0.001) # Small sleep to prevent 100% CPU usage

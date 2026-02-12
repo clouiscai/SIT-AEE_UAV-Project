@@ -155,7 +155,10 @@ class SquareVelocityMission(Node):
 
         elif self.phase == 'WAIT_FOR_GUIDED':
             if self.state.mode != 'GUIDED':
-                self.set_mode('GUIDED')
+                if self.phase_time() >= 1.0:
+                    self.get_logger().info("Requesting GUIDED mode...")
+                    self.set_mode('GUIDED')
+                    self.start_phase() # Reset timer for throttling
                 return
 
             self.start_phase()
@@ -165,10 +168,14 @@ class SquareVelocityMission(Node):
         elif self.phase == 'GUIDED_DELAY':
             if self.phase_time() >= 2.0:
                 self.phase = 'WAIT_FOR_ARM'
+                self.start_phase() # Initial throttle for arming
 
         elif self.phase == 'WAIT_FOR_ARM':
             if not self.state.armed:
-                self.arm(True)
+                if self.phase_time() >= 1.0:
+                    self.get_logger().info("Requesting Arm...")
+                    self.arm(True)
+                    self.start_phase() # Reset timer for throttling
                 return
 
             self.start_phase()

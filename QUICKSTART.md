@@ -6,33 +6,35 @@ This simulator allows you to control a virtual drone using **Velocity Commands (
 
 To run the simulator, you need 4 separate terminal windows.
 
-### 1. Start Fake Pixhawk
-This terminal simulates the drone hardware and physics, reacting to velocity setpoints.
+### 1. Start MAVROS (Communication Bridge)
+Start this FIRST. It listens for the drone's data.
 ```bash
-cd /mnt/c/Users/cloui/Downloads/"UAV Project"
+source /opt/ros/humble/setup.bash
+# We listen on port 14550 for the Fake Pixhawk
+ros2 run mavros mavros_node --ros-args \
+  -p fcu_url:=udp://:14550@ \
+  -p gcs_url:=udp://@127.0.0.1:14555
+```
+
+### 2. Start Fake Pixhawk
+This terminal simulates hardware. Start it second.
+```bash
+cd /mnt/c/Users/cloui/Documents/GitHub/SIT-AEE_UAV-Project
 python3 fake_pixhawk.py
 ```
 
-### 2. Start MAVROS
-The communication bridge.
-```bash
-source /opt/ros/humble/setup.bash
-ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://@127.0.0.1:14550 -p gcs_url:=udp://@127.0.0.1:14555
-```
-
-### 3. Start Flight Controller
+### 3. Start manual flight controller
 This translates your keyboard into **Velocity Setpoints**. Keep this window **focused**.
 ```bash
 source /opt/ros/humble/setup.bash
-cd /mnt/c/Users/cloui/Downloads/"UAV Project"
+cd /mnt/c/Users/cloui/Documents/GitHub/SIT-AEE_UAV-Project
 python3 autonomous_square_mission.py
 ```
 
 ### 4. Start 3D Visualizer
-Launches the Matplotlib 3D UI to see the drone point and trail.
 ```bash
 source /opt/ros/humble/setup.bash
-cd /mnt/c/Users/cloui/Downloads/"UAV Project"
+cd /mnt/c/Users/cloui/Documents/GitHub/SIT-AEE_UAV-Project
 python3 visualizer.py
 ```
 
