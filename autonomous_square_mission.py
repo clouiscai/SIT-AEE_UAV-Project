@@ -75,6 +75,10 @@ class SquareVelocityMission(Node):
         self.phase_start_ns = self.get_clock().now().nanoseconds
         self.takeoff_target = None
 
+        # Diagnostic counters
+        self._diag_tick = 0
+        self._diag_interval = 40  # Every 40 ticks @ 20Hz = every 2 seconds
+
         # Control loop @ 20 Hz
         self.timer = self.create_timer(0.05, self.control_loop)
 
@@ -136,10 +140,23 @@ class SquareVelocityMission(Node):
     # Main control loop
     # ===============================
     def control_loop(self):
-        # Guard conditions
+        self._diag_tick += 1
+
+        # Guard conditions with diagnostic logging
         if not self.state.connected:
+            if self._diag_tick % self._diag_interval == 0:
+                self.get_logger().warn(
+                    "Waiting for MAVROS connection... "
+                    "(Is MAVROS running? Is the Pixhawk plugged in?)"
+                )
             return
         if self.current_pose is None:
+            if self._diag_tick % self._diag_interval == 0:
+                self.get_logger().warn(
+                    "MAVROS connected, but no position data yet. "
+                    "Waiting for /mavros/local_position/pose... "
+                    "(Does the Pixhawk have a GPS lock or EKF source?)"
+                )
             return
 
         # Local ENU position
